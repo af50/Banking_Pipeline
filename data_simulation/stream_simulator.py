@@ -1,173 +1,381 @@
-# data_simulation/config.py
+# data_simulation/stream_simulator.py
 """
-Central configuration for the Banking Pipeline.
-All paths, settings, and constants live here.
-Every other file imports from this module.
-Supports both LOCAL and CLOUD (Azure) environments
-via the ENV environment variable.
+Stream Simulator for Banking Pipeline.
+
+Replays CSV files as a live stream by writing small batches
+to the landing zone at a configurable interval.
+
+LOCAL mode  → writes Parquet batches to local_warehouse/delta/landing/
+CLOUD mode  → writes Parquet batches to ADLS Gen2 landing zone
+
+Usage:
+    # Local — all tables, no delay (for testing)
+    python data_simulation/stream_simulator.py --delay 0 --max-batches 5
+
+    # Local — specific table
+    python data_simulation/stream_simulator.py --table card_transactions --max-batches 3
+
+    # Local — full run
+    python data_simulation/stream_simulator.py
+
+    # Cloud
+    ENV=cloud python data_simulation/stream_simulator.py
 """
+import argparse
+import logging
 import os
-from dotenv import load_dotenv
+import re
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+import pandas as pd
 
-load_dotenv()
+os.environ["HADOOP_HOME"]    = "E:\\hadoop"
+os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+import sys
+os.environ["PYSPARK_PYTHON"]  = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-# ── Environment ───────────────────────────────────────────────────────────────
-ENV = os.getenv("ENV", "local")  # "local" or "cloud"
-IS_LOCAL = ENV == "local"
-IS_CLOUD = ENV == "cloud"
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 
-# ── Azure Storage (cloud only) ────────────────────────────────────────────────
-STORAGE_ACCOUNT    = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "bankingpipelinesa")
-ABFSS_LANDING      = f"abfss://landing@{STORAGE_ACCOUNT}.dfs.core.windows.net"
-ABFSS_BRONZE       = f"abfss://bronze@{STORAGE_ACCOUNT}.dfs.core.windows.net"
-ABFSS_SILVER       = f"abfss://silver@{STORAGE_ACCOUNT}.dfs.core.windows.net"
-ABFSS_GOLD         = f"abfss://gold@{STORAGE_ACCOUNT}.dfs.core.windows.net"
-
-# ── Local paths ───────────────────────────────────────────────────────────────
-BASE_DIR           = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_SYNTHETIC     = os.path.join(BASE_DIR, "data", "synthetic")
-DATA_KAGGLE        = os.path.join(BASE_DIR, "data", "kaggle")
-LOCAL_LANDING      = os.path.join(BASE_DIR, "local_warehouse", "delta", "landing")
-LOCAL_BRONZE       = os.path.join(BASE_DIR, "local_warehouse", "delta", "bronze")
-LOCAL_SILVER       = os.path.join(BASE_DIR, "local_warehouse", "delta", "silver")
-LOCAL_GOLD         = os.path.join(BASE_DIR, "local_warehouse", "delta", "gold")
-
-# ── Source data files ─────────────────────────────────────────────────────────
-ATM_MASTER_FILE         = os.path.join(DATA_SYNTHETIC, "atm_master.csv")
-CARDS_TXN_FILE          = os.path.join(DATA_SYNTHETIC, "cards.csv")
-WALLET_FILE             = os.path.join(DATA_SYNTHETIC, "wallet.csv")
-OUT_OF_CASH_FILE        = os.path.join(DATA_SYNTHETIC, "out_of_cash.csv")
-USERS_FILE              = os.path.join(DATA_SYNTHETIC, "users_data.csv")
-CARDS_FILE              = os.path.join(DATA_SYNTHETIC, "cards_data.csv")
-MCC_CODES_FILE          = os.path.join(DATA_SYNTHETIC, "mcc_codes.json")
-FRAUD_LABELS_FILE       = os.path.join(DATA_SYNTHETIC, "train_fraud_labels.json")
-ATM_MAP_FILE            = os.path.join(DATA_SYNTHETIC, "atm_governorate_region_map.json")
-KAGGLE_TRANSACTIONS     = os.path.join(DATA_KAGGLE,    "transactions_data.csv")
-
-# ── Dynamic path resolver ─────────────────────────────────────────────────────
-def get_path(layer: str, table: str) -> str:
-    """
-    Returns the correct path for a given layer and table
-    based on current environment (local or cloud).
-
-    Usage:
-        get_path("bronze", "raw_card_transactions")
-        → local:  /local_warehouse/delta/bronze/raw_card_transactions
-        → cloud:  abfss://bronze@bankingpipelinesa.dfs.core.windows.net/raw_card_transactions
-    """
-    if IS_LOCAL:
-        base = {
-            "landing": LOCAL_LANDING,
-            "bronze":  LOCAL_BRONZE,
-            "silver":  LOCAL_SILVER,
-            "gold":    LOCAL_GOLD,
-        }[layer]
-        return os.path.join(base, table)
-    else:
-        base = {
-            "landing": ABFSS_LANDING,
-            "bronze":  ABFSS_BRONZE,
-            "silver":  ABFSS_SILVER,
-            "gold":    ABFSS_GOLD,
-        }[layer]
-        return f"{base}/{table}"
-
-# ── Landing paths ─────────────────────────────────────────────────────────────
-LANDING_CARD_TRANSACTIONS   = get_path("landing", "card_transactions")
-LANDING_ATM_TRANSACTIONS    = get_path("landing", "atm_transactions")
-LANDING_WALLET              = get_path("landing", "wallet_transactions")
-LANDING_OUT_OF_CASH         = get_path("landing", "out_of_cash")
-LANDING_CUSTOMERS           = get_path("landing", "customers")
-LANDING_CARDS               = get_path("landing", "cards")
-LANDING_ATM_MASTER          = get_path("landing", "atm_master")
-LANDING_KAGGLE_TRANSACTIONS = get_path("landing", "kaggle_transactions")
-
-# ── Bronze paths ──────────────────────────────────────────────────────────────
-BRONZE_CARD_TRANSACTIONS    = get_path("bronze", "raw_card_transactions")
-BRONZE_ATM_TRANSACTIONS     = get_path("bronze", "raw_atm_transactions")
-BRONZE_WALLET               = get_path("bronze", "raw_wallet_transactions")
-BRONZE_OUT_OF_CASH          = get_path("bronze", "raw_out_of_cash")
-BRONZE_CUSTOMERS            = get_path("bronze", "raw_customers")
-BRONZE_CARDS                = get_path("bronze", "raw_cards")
-BRONZE_ATM_MASTER           = get_path("bronze", "raw_atm_master")
-BRONZE_KAGGLE_TRANSACTIONS  = get_path("bronze", "raw_kaggle_transactions")
-
-# ── Silver paths ──────────────────────────────────────────────────────────────
-SILVER_CARD_TRANSACTIONS    = get_path("silver", "card_transactions")
-SILVER_ATM_TRANSACTIONS     = get_path("silver", "atm_transactions")
-SILVER_WALLET               = get_path("silver", "wallet_transactions")
-SILVER_OUT_OF_CASH          = get_path("silver", "out_of_cash_events")
-SILVER_CUSTOMERS            = get_path("silver", "customers")
-SILVER_CARDS                = get_path("silver", "cards")
-SILVER_ATM_MASTER           = get_path("silver", "atm_master")
-SILVER_KAGGLE_TRANSACTIONS  = get_path("silver", "kaggle_transactions")
-
-# ── Gold paths ────────────────────────────────────────────────────────────────
-GOLD_FACT_CARD_TRANSACTIONS = get_path("gold", "fact_card_transactions")
-GOLD_FACT_ATM_TRANSACTIONS  = get_path("gold", "fact_atm_transactions")
-GOLD_FACT_WALLET            = get_path("gold", "fact_wallet_transactions")
-GOLD_FACT_OOC               = get_path("gold", "fact_out_of_cash_events")
-GOLD_DIM_CUSTOMER           = get_path("gold", "dim_customer")
-GOLD_DIM_CARD               = get_path("gold", "dim_card")
-GOLD_DIM_ATM                = get_path("gold", "dim_atm")
-GOLD_DIM_DATE               = get_path("gold", "dim_date")
-GOLD_DIM_MERCHANT           = get_path("gold", "dim_merchant")
-GOLD_DIM_MCC                = get_path("gold", "dim_merchant_category")
-GOLD_DIM_CHANNEL            = get_path("gold", "dim_channel")
-GOLD_DIM_ERROR              = get_path("gold", "dim_error_type")
-
-# ── Checkpoints (cloud only) ──────────────────────────────────────────────────
-CHECKPOINT_CARD_TRANSACTIONS   = get_path("bronze", "_checkpoints/card_transactions")
-CHECKPOINT_ATM_TRANSACTIONS    = get_path("bronze", "_checkpoints/atm_transactions")
-CHECKPOINT_WALLET              = get_path("bronze", "_checkpoints/wallet")
-CHECKPOINT_OUT_OF_CASH         = get_path("bronze", "_checkpoints/out_of_cash")
-CHECKPOINT_CUSTOMERS           = get_path("bronze", "_checkpoints/customers")
-CHECKPOINT_CARDS               = get_path("bronze", "_checkpoints/cards")
-CHECKPOINT_ATM_MASTER          = get_path("bronze", "_checkpoints/atm_master")
-CHECKPOINT_KAGGLE_TRANSACTIONS = get_path("bronze", "_checkpoints/kaggle_transactions")
-
-# ── Quarantine ────────────────────────────────────────────────────────────────
-QUARANTINE_PATH = get_path("silver", "_quarantine")
-
-# ── Simulation settings ───────────────────────────────────────────────────────
-SIMULATOR_BATCH_SIZE  = int(os.getenv("SIMULATOR_BATCH_SIZE", 50))
-SIMULATOR_DELAY_SECS  = float(os.getenv("SIMULATOR_DELAY_SECS", 5.0))
-SIMULATOR_MAX_BATCHES = os.getenv("SIMULATOR_MAX_BATCHES", None)
-
-# ── Spark settings ────────────────────────────────────────────────────────────
-SPARK_APP_NAME   = "banking-pipeline"
-SPARK_MASTER     = os.getenv("SPARK_MASTER", "local[*]")
-SPARK_LOG_LEVEL  = os.getenv("SPARK_LOG_LEVEL", "WARN")
-
-# ── dbt settings ─────────────────────────────────────────────────────────────
-DBT_PROJECT_DIR  = os.path.join(BASE_DIR, "banking_dbt")
-DBT_TARGET       = os.getenv("DBT_TARGET", "dev")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from data_simulation.config import (
+    ATM_MASTER_FILE, CARDS_FILE, CARDS_TXN_FILE,
+    KAGGLE_TRANSACTIONS, LOG_FORMAT, LOG_LEVEL,
+    OUT_OF_CASH_FILE, SIMULATOR_BATCH_SIZE,
+    SIMULATOR_DELAY_SECS, SIMULATOR_MAX_BATCHES,
+    SPARK_APP_NAME, SPARK_LOG_LEVEL, SPARK_MASTER,
+    USERS_FILE, WALLET_FILE,
+    LANDING_CARD_TRANSACTIONS, LANDING_WALLET,
+    LANDING_OUT_OF_CASH, LANDING_CUSTOMERS,
+    LANDING_CARDS, LANDING_ATM_MASTER,
+    LANDING_KAGGLE_TRANSACTIONS, IS_LOCAL,
+)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-LOG_LEVEL  = os.getenv("LOG_LEVEL", "INFO")
-LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+logging.basicConfig(format=LOG_FORMAT, level=getattr(logging, LOG_LEVEL))
+logger = logging.getLogger("stream_simulator")
 
-# ── Business constants ────────────────────────────────────────────────────────
-BANK_NAME        = "Attijariwafa Bank"
-CURRENCY         = "MAD"
-COUNTRY          = "Maroc"
-MAX_ATM_AMOUNT   = 4000    # MAD — Moroccan ATM withdrawal limit
-MIN_ATM_AMOUNT   = 100     # MAD — minimum transaction
-FRAUD_THRESHOLD  = 0.02    # 2% fraud rate threshold for HIGH risk
 
-# ── Validation ────────────────────────────────────────────────────────────────
-VALID_RESP_CODES    = [0, 96, 51, 14, 61, 43, 54]
-VALID_MSG_TYPES     = [200, 210, 420, 430]
-VALID_ATM_TYPES     = ["Retrait & Dépôt", "Retrait uniquement"]
-VALID_CARD_TYPES    = ["Débit", "Crédit"]
-VALID_CARD_BRANDS   = ["Visa", "Mastercard", "CMI"]
-VALID_SEGMENTS      = ["PREMIUM", "STANDARD", "BASIC"]
-VALID_WALLET_TYPES  = ["DEMANDE RETRAIT", "DEMANDE DÉPÔT", "ANNULATION RETRAIT"]
+# ── Spark ─────────────────────────────────────────────────────────────────────
+def get_spark() -> SparkSession:
+    from delta import configure_spark_with_delta_pip
+    builder = (
+        SparkSession.builder
+        .appName(f"{SPARK_APP_NAME}-simulator")
+        .master(SPARK_MASTER)
+        .config("spark.sql.extensions",
+                "io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog",
+                "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config("spark.sql.shuffle.partitions", "4")
+        .config("spark.driver.memory", "2g")
+        .config("spark.local.dir", "C:/tmp/spark")
+        .config("spark.sql.warehouse.dir", "C:/tmp/spark-warehouse")
+    )
+    if IS_LOCAL:
+        builder = builder.config(
+            "spark.jars.packages",
+            "io.delta:delta-core_2.12:2.4.0"
+        )
+    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+    spark.sparkContext.setLogLevel(SPARK_LOG_LEVEL)
+    return spark
+
+
+# ── Column cleaner ────────────────────────────────────────────────────────────
+def clean_col_name(name: str) -> str:
+    """Replaces special characters in column names with underscores."""
+    return re.sub(r'[ ,;{}()\n\t=]', '_', name).lower().strip('_')
+
+
+# ── Writer ────────────────────────────────────────────────────────────────────
+def write_batch(
+    spark: SparkSession,
+    pdf: pd.DataFrame,
+    output_path: str,
+    batch_num: int,
+    table_name: str,
+) -> None:
+    """
+    Writes one pandas batch as Parquet to the landing zone.
+    - Cleans column names
+    - Drops unnamed index columns
+    - Adds pipeline metadata columns
+    - Writes to a uniquely named subfolder
+    """
+    now = datetime.now(timezone.utc)
+    batch_id = str(uuid.uuid4())[:8]
+    ts = now.strftime("%Y%m%d_%H%M%S")
+
+    # drop pandas index columns
+    pdf = pdf.loc[:, ~pdf.columns.str.startswith("Unnamed")]
+
+    # drop empty columns (like the '.' column in out_of_cash)
+    pdf = pdf.loc[:, pdf.columns.str.strip() != '.']
+    pdf = pdf.loc[:, pdf.columns.str.strip() != '']
+
+    # clean column names
+    pdf.columns = [clean_col_name(c) for c in pdf.columns]
+
+    # add metadata
+    pdf["_batch_id"]     = batch_id
+    pdf["_batch_num"]    = batch_num
+    pdf["_ingested_at"]  = now.isoformat()
+    pdf["_source_table"] = table_name
+
+    # infer schema from pandas — Bronze takes raw data as-is
+    # Silver does all the cleaning and type casting
+    sdf = spark.createDataFrame(pdf)
+
+    file_path = os.path.join(
+        output_path,
+        f"{table_name}_{ts}_{str(batch_num).zfill(6)}_{batch_id}"
+    )
+
+    if IS_LOCAL:
+        os.makedirs(output_path, exist_ok=True)
+
+    (
+        sdf.write
+        .format("parquet")
+        .mode("overwrite")
+        .save(file_path)
+    )
+
+
+# ── Core simulator ────────────────────────────────────────────────────────────
+def simulate_table(
+    spark: SparkSession,
+    source_file: str,
+    output_path: str,
+    table_name: str,
+    batch_size: int = SIMULATOR_BATCH_SIZE,
+    delay_seconds: float = SIMULATOR_DELAY_SECS,
+    max_batches: Optional[int] = None,
+) -> dict:
+    """
+    Reads a CSV file and writes it in batches to the landing zone.
+    Each batch is a separate Parquet file — Bronze Auto Loader / watcher
+    picks up each file the moment it appears.
+    """
+    if not os.path.exists(source_file):
+        logger.error(f"Source file not found: {source_file}")
+        return {"batches": 0, "rows": 0, "elapsed_seconds": 0}
+
+    logger.info(f"Loading {table_name} from {source_file}")
+    pdf = pd.read_csv(source_file, low_memory=False)
+
+    # drop unnamed index columns immediately
+    pdf = pdf.loc[:, ~pdf.columns.str.startswith("Unnamed")]
+    pdf = pdf.loc[:, pdf.columns.str.strip() != '.']
+
+    total_rows    = len(pdf)
+    total_batches = (total_rows + batch_size - 1) // batch_size
+    if max_batches:
+        total_batches = min(total_batches, max_batches)
+
+    logger.info(
+        f"{table_name}: {total_rows:,} rows → "
+        f"{total_batches:,} batches of {batch_size}"
+    )
+
+    stats = {
+        "batches": 0, "rows": 0,
+        "start": datetime.now(timezone.utc)
+    }
+
+    try:
+        for batch_num in range(total_batches):
+            start_idx = batch_num * batch_size
+            batch_pdf = pdf.iloc[start_idx:start_idx + batch_size].copy()
+
+            write_batch(spark, batch_pdf, output_path, batch_num, table_name)
+
+            stats["batches"] += 1
+            stats["rows"]    += len(batch_pdf)
+
+            if batch_num % 20 == 0 or batch_num == total_batches - 1:
+                elapsed = (
+                    datetime.now(timezone.utc) - stats["start"]
+                ).seconds
+                pct = (batch_num + 1) / total_batches * 100
+                logger.info(
+                    f"{table_name} | {pct:5.1f}% | "
+                    f"batch {batch_num+1}/{total_batches} | "
+                    f"rows {stats['rows']:,} | {elapsed}s"
+                )
+
+            time.sleep(delay_seconds)
+
+    except KeyboardInterrupt:
+        logger.info(
+            f"{table_name}: stopped by user "
+            f"after {stats['batches']} batches"
+        )
+
+    elapsed = (datetime.now(timezone.utc) - stats["start"]).seconds
+    stats["elapsed_seconds"] = elapsed
+    logger.info(
+        f"✓ {table_name}: {stats['batches']} batches, "
+        f"{stats['rows']:,} rows, {elapsed}s"
+    )
+    return stats
+
+
+# ── Static loader ─────────────────────────────────────────────────────────────
+def load_static_tables(spark: SparkSession) -> None:
+    """
+    Writes dimension tables to landing zone once at pipeline start.
+    ATM master, customers, cards don't need streaming —
+    they change infrequently and are loaded in full each run.
+    """
+    static_tables = [
+        (ATM_MASTER_FILE, LANDING_ATM_MASTER, "atm_master"),
+        (USERS_FILE,      LANDING_CUSTOMERS,  "customers"),
+        (CARDS_FILE,      LANDING_CARDS,      "cards"),
+    ]
+
+    for source, output, name in static_tables:
+        logger.info(f"Loading static table: {name}")
+        if not os.path.exists(source):
+            logger.warning(f"File not found — skipping: {source}")
+            continue
+
+        pdf = pd.read_csv(source, low_memory=False)
+        logger.info(f"  {name}: {len(pdf):,} rows")
+
+        write_batch(spark, pdf, output, 0, name)
+        logger.info(f"  ✓ {name} written to landing")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(
+        description="Banking Pipeline Stream Simulator"
+    )
+    parser.add_argument(
+        "--table",
+        choices=[
+            "card_transactions", "wallet",
+            "out_of_cash", "kaggle_transactions", "all"
+        ],
+        default="all",
+        help="Which streaming table to run (default: all)"
+    )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=SIMULATOR_MAX_BATCHES,
+        help="Max batches per table — None means full file"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=SIMULATOR_BATCH_SIZE,
+        help=f"Rows per batch (default: {SIMULATOR_BATCH_SIZE})"
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=SIMULATOR_DELAY_SECS,
+        help=f"Seconds between batches (default: {SIMULATOR_DELAY_SECS})"
+    )
+    parser.add_argument(
+        "--skip-static",
+        action="store_true",
+        help="Skip loading static dimension tables"
+    )
+    args = parser.parse_args()
+
+    logger.info("=" * 60)
+    logger.info("Banking Pipeline — Stream Simulator")
+    logger.info(f"Mode:        {'LOCAL' if IS_LOCAL else 'CLOUD'}")
+    logger.info(f"Table:       {args.table}")
+    logger.info(f"Batch size:  {args.batch_size}")
+    logger.info(f"Delay:       {args.delay}s")
+    logger.info(f"Max batches: {args.max_batches or 'unlimited'}")
+    logger.info("=" * 60)
+
+    spark = get_spark()
+
+    # Step 1 — static dimension tables
+    if not args.skip_static:
+        logger.info("Step 1 — Loading static dimension tables")
+        load_static_tables(spark)
+    else:
+        logger.info("Step 1 — Skipping static tables (--skip-static)")
+
+    # Step 2 — streaming fact tables
+    streaming_tables = {
+        "card_transactions": (
+            CARDS_TXN_FILE,
+            LANDING_CARD_TRANSACTIONS,
+            "card_transactions",
+        ),
+        "wallet": (
+            WALLET_FILE,
+            LANDING_WALLET,
+            "wallet_transactions",
+        ),
+        "out_of_cash": (
+            OUT_OF_CASH_FILE,
+            LANDING_OUT_OF_CASH,
+            "out_of_cash",
+        ),
+        "kaggle_transactions": (
+            KAGGLE_TRANSACTIONS,
+            LANDING_KAGGLE_TRANSACTIONS,
+            "kaggle_transactions",
+        ),
+    }
+
+    tables_to_run = (
+        list(streaming_tables.keys())
+        if args.table == "all"
+        else [args.table]
+    )
+
+    logger.info(f"Step 2 — Streaming {len(tables_to_run)} table(s)")
+
+    all_stats = {}
+    for key in tables_to_run:
+        src, output, name = streaming_tables[key]
+        all_stats[name] = simulate_table(
+            spark=spark,
+            source_file=src,
+            output_path=output,
+            table_name=name,
+            batch_size=args.batch_size,
+            delay_seconds=args.delay,
+            max_batches=args.max_batches,
+        )
+
+    # summary
+    print()
+    print("=" * 65)
+    print("SIMULATION COMPLETE")
+    print("=" * 65)
+    total_rows    = sum(s["rows"] for s in all_stats.values())
+    total_batches = sum(s["batches"] for s in all_stats.values())
+    for name, stats in all_stats.items():
+        print(
+            f"  {name:<30} {stats['rows']:>10,} rows  "
+            f"{stats['batches']:>5} batches  "
+            f"{stats['elapsed_seconds']}s"
+        )
+    print("-" * 65)
+    print(
+        f"  {'TOTAL':<30} {total_rows:>10,} rows  "
+        f"{total_batches:>5} batches"
+    )
+    print("=" * 65)
+
+    spark.stop()
+
 
 if __name__ == "__main__":
-    print(f"ENV:          {ENV}")
-    print(f"BANK:         {BANK_NAME}")
-    print(f"CURRENCY:     {CURRENCY}")
-    print(f"BRONZE cards: {BRONZE_CARD_TRANSACTIONS}")
-    print(f"SILVER cards: {SILVER_CARD_TRANSACTIONS}")
-    print(f"Config loaded successfully")
+    main()
