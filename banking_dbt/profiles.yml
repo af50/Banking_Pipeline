@@ -1,0 +1,24 @@
+banking_local:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/banking.duckdb"
+      schema: banking_dev
+      threads: 4
+      extensions:
+        - parquet
+        - json
+      external_root: "D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver"
+
+
+      
+    # CLOUD — Databricks (fill in when Azure is ready) i hope you'll be able to use it in databricks hehe ,
+    # I tried to find a cloud code to the same thing as my local code 
+    prod:
+      type: databricks
+      host: "{{ env_var('DATABRICKS_HOST', '') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH', '') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN', '') }}"
+      schema: banking_prod
+      threads: 8
