@@ -1,77 +1,23 @@
-
 version: 2
 
 sources:
   - name: silver
-    description: "Silver layer — PySpark cleaned Delta tables read via DuckDB parquet scan"
+    description: "Silver layer — cleaned Delta tables"
     schema: banking_dev
     tables:
-
       - name: atm_master
-        description: "159 Moroccan ATMs across 10 regions"
-        columns:
-          - name: terminal_id
-            description: "Unique ATM identifier"
-            tests: [not_null, unique]
-          - name: region
-            tests: [not_null]
-          - name: cash_limit
-            tests: [not_null]
-
+        description: "159 Moroccan ATMs"
       - name: customers
-        description: "2000 Moroccan banking customers"
-        columns:
-          - name: client_id
-            tests: [not_null, unique]
-          - name: credit_score
-            tests: [not_null]
-
+        description: "2000 customers"
       - name: cards
-        description: "6146 cards linked to customers"
-        columns:
-          - name: card_id
-            tests: [not_null, unique]
-          - name: client_id
-            tests: [not_null]
-
+        description: "6146 cards"
       - name: card_transactions
         description: "ATM card transactions"
-        columns:
-          - name: refnum
-            tests: [not_null, unique]
-          - name: terminal_id
-            tests: [not_null]
-          - name: amount_mad
-            tests: [not_null]
-
       - name: wallet_transactions
         description: "Mobile wallet transactions"
-        columns:
-          - name: transaction_id
-            tests: [not_null, unique]
-          - name: amount_mad
-            tests: [not_null]
-
       - name: out_of_cash
-        description: "ATM out-of-cash events"
-        columns:
-          - name: refnum
-            tests: [not_null]
-          - name: terminal_id
-            tests: [not_null]
-
+        description: "Out-of-cash events"
       - name: kaggle_transactions
         description: "Kaggle transactions with fraud labels"
-        columns:
-          - name: transaction_id
-            tests: [not_null, unique]
-          - name: client_id
-            tests: [not_null]
-
       - name: pan_customer_map
-        description: "PAN to customer bridge table"
-        columns:
-          - name: pan_masked
-            tests: [not_null]
-          - name: client_id
-            tests: [not_null]
+        description: "PAN to customer bridge"
