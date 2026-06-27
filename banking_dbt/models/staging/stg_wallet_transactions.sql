@@ -1,13 +1,9 @@
-
 -- staging/stg_wallet_transactions.sql
 
 {{ config(materialized='view', tags=['staging']) }}
 
 WITH source AS (
-    SELECT * FROM read_parquet(
-        'D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver/wallet_transactions/**/*.parquet',
-        hive_partitioning = true
-    )
+    SELECT * FROM {{ source('silver', 'wallet_transactions') }}
 ),
 
 renamed AS (
@@ -33,3 +29,4 @@ renamed AS (
 )
 
 SELECT * FROM renamed
+QUALIFY ROW_NUMBER() OVER (PARTITION BY transaction_id ORDER BY _silver_loaded_at DESC) = 1
