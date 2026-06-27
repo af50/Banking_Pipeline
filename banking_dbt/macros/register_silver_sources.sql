@@ -1,30 +1,43 @@
-
--- macros/register_silver_sources.sql
--- Registers Silver Delta/Parquet files as DuckDB views
--- Called once before dbt run via on-run-start hook
-
 {% macro register_silver_sources() %}
 
-  {% set silver_base = 'D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver' %}
+  {% set silver_base = env_var(
+      'SILVER_PATH',
+      '../local_warehouse/delta/silver'
+  ) %}
 
-  {% set tables = [
-    'atm_master',
-    'customers',
-    'cards',
-    'card_transactions',
-    'wallet_transactions',
-    'out_of_cash',
-    'kaggle_transactions',
-    'pan_customer_map',
-  ] %}
+  {% set silver_schema = target.schema %}
+  {% set silver_database = target.database %}
 
-  {% for table in tables %}
-    {% set path = silver_base ~ '/' ~ table ~ '/**/*.parquet' %}
-    {% call statement('register_' ~ table) %}
-      CREATE OR REPLACE VIEW {{ schema }}.{{ table }} AS
-      SELECT * FROM read_parquet('{{ path }}', hive_partitioning=true);
+  {% if execute %}
+
+    {% call statement('install_delta_ext') %}
+      INSTALL delta; LOAD delta;
     {% endcall %}
-    {{ log("Registered silver view: " ~ table, info=True) }}
-  {% endfor %}
+
+    {% call statement('create_silver_schema') %}
+      CREATE SCHEMA IF NOT EXISTS {{ silver_database }}.{{ silver_schema }};
+    {% endcall %}
+
+    {% set tables = [
+      'atm_master', 'customers', 'cards', 'card_transactions',
+      'wallet_transactions', 'out_of_cash', 'kaggle_transactions',
+      'pan_customer_map',
+    ] %}
+
+    {% for table in tables %}
+      {% set path = silver_base ~ '/' ~ table %}
+      {% call statement('register_' ~ table) %}
+        CREATE OR REPLACE VIEW {{ silver_database }}.{{ silver_schema }}.{{ table }} AS
+        SELECT * FROM delta_scan('{{ path }}');
+      {% endcall %}
+      {{ log("✓ Registered silver view: " ~ silver_database ~ "." ~ silver_schema ~ "." ~ table, info=True) }}
+    {% endfor %}
+
+    {% call statement('commit_silver_registration') %}
+      COMMIT;
+    {% endcall %}
+    {{ log("✓ Committed silver schema to disk", info=True) }}
+
+  {% endif %}
 
 {% endmacro %}
