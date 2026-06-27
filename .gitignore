@@ -1,8 +1,1 @@
 
-data/
-local_warehouse/
-*.csv
-__pycache__/
-.env
-target/
-dbt_packages/
