@@ -1,11 +1,3 @@
--- fact_atm_transactions.sql 1st trail meds going to be used for incremental load of fact table atm transactions .
-{{ config(
-    materialized='incremental',
-    unique_key='atm_transaction_key',
-    incremental_strategy='merge',
-    tags=['facts']
-) }}
-
 WITH stg AS (
     SELECT * FROM {{ ref('stg_atm_transactions') }}
     {% if is_incremental() %}
@@ -13,9 +5,9 @@ WITH stg AS (
     {% endif %}
 ),
 
-pan_map AS (
-    SELECT pan_masked, customer_key, card_key
-    FROM {{ ref('pan_customer_map') }}
+dim_cust AS (
+    SELECT customer_key, client_id
+    FROM {{ ref('dim_customer') }}
 ),
 
 dim_atm AS (
@@ -37,11 +29,10 @@ dim_dt AS (
 
 joined AS (
     SELECT
-        {{ dbt_utils.generate_surrogate_key(['stg.refnum']) }}
-                                                AS atm_transaction_key,
+        {{ dbt_utils.generate_surrogate_key(['stg.refnum']) }} AS atm_transaction_key,
         dt.date_key,
-        pm.customer_key,
-        pm.card_key,
+        dc.customer_key,
+        CAST(NULL AS VARCHAR) AS card_key,
         da.atm_key,
         dch.channel_key,
         derr.error_type_key,
@@ -59,10 +50,10 @@ joined AS (
         stg.client_id,
         stg.currency,
         stg._silver_loaded_at,
-        CURRENT_TIMESTAMP                       AS _loaded_at
+        CURRENT_TIMESTAMP AS _loaded_at
     FROM stg
-    LEFT JOIN pan_map pm
-        ON stg.refnum = pm.pan_masked
+    LEFT JOIN dim_cust dc
+        ON stg.client_id = dc.client_id
     LEFT JOIN dim_atm da
         ON stg.atm_id = da.atm_id
     LEFT JOIN dim_ch dch
