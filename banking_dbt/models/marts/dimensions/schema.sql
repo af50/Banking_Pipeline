@@ -1,0 +1,134 @@
+version: 2
+
+models:
+
+  - name: dim_customer
+    description: "Customer dimension — 2,000 Moroccan banking customers with credit and risk attributes"
+    columns:
+      - name: customer_key
+        description: "Surrogate key (MD5 of client_id)"
+        tests: [not_null, unique]
+      - name: client_id
+        tests: [not_null, unique]
+      - name: credit_score
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 300
+              max_value: 850
+      - name: debt_risk_level
+        tests:
+          - accepted_values:
+              values: ['LOW_RISK', 'MEDIUM_RISK', 'HIGH_RISK']
+      - name: credit_usage_tier
+        tests:
+          - accepted_values:
+              values: ['LIGHT_USER', 'MODERATE_USER', 'HEAVY_USER']
+
+  - name: dim_card
+    description: "Card dimension — 6,146 bank cards with dark web risk flags"
+    columns:
+      - name: card_key
+        tests: [not_null, unique]
+      - name: card_id
+        tests: [not_null, unique]
+      - name: client_id
+        tests: [not_null]
+      - name: customer_key
+        tests: [not_null]
+      - name: dark_web_risk
+        tests:
+          - accepted_values:
+              values: ['LOW', 'HIGH']
+      - name: card_risk_level
+        tests:
+          - accepted_values:
+              values: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+
+  - name: dim_atm
+    description: "ATM dimension — 159 Moroccan ATMs with region, capacity, and maturity attributes"
+    columns:
+      - name: atm_key
+        tests: [not_null, unique]
+      - name: atm_id
+        tests: [not_null, unique]
+      - name: cash_limit_mad
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: capacity_tier
+        tests:
+          - accepted_values:
+              values: ['LOW_CAPACITY', 'MEDIUM_CAPACITY', 'HIGH_CAPACITY']
+      - name: atm_maturity
+        tests:
+          - accepted_values:
+              values: ['NEW', 'ESTABLISHED', 'MATURE']
+
+  - name: dim_date
+    description: "Date dimension — daily spine from 2023-01-01 to 2027-12-31 with Moroccan holidays"
+    columns:
+      - name: date_key
+        description: "Integer date key YYYYMMDD"
+        tests: [not_null, unique]
+      - name: full_date
+        tests: [not_null, unique]
+      - name: year
+        tests: [not_null]
+      - name: month
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12
+
+  - name: dim_geography
+    description: "Geography dimension — Moroccan regions from ATM and merchant locations"
+    columns:
+      - name: geography_key
+        tests: [not_null, unique]
+      - name: region
+        tests: [not_null]
+      - name: country
+        tests: [not_null]
+      - name: macro_region
+        tests:
+          - accepted_values:
+              values: ['NORTH', 'SOUTH', 'EAST', 'OTHER']
+      - name: population_tier
+        tests:
+          - accepted_values:
+              values: ['TIER_1', 'TIER_2', 'TIER_3']
+
+  - name: dim_merchant
+    description: "Merchant dimension — derived from Kaggle transaction source merchants"
+    columns:
+      - name: merchant_key
+        tests: [not_null, unique]
+      - name: merchant_id
+        tests: [not_null, unique]
+      - name: mcc_code
+        tests: [not_null]
+
+  - name: dim_merchant_category
+    description: "MCC dimension — merchant category codes with risk and group classification"
+    columns:
+      - name: merchant_category_key
+        tests: [not_null, unique]
+      - name: mcc_code
+        tests: [not_null, unique]
+      - name: category_group
+        tests: [not_null]
+
+  - name: pan_customer_map
+    description: "PAN-to-customer bridge table — links masked card PANs to client_id and surrogate keys"
+    columns:
+      - name: pan_key
+        tests: [not_null, unique]
+      - name: pan_masked
+        tests: [not_null]
+      - name: client_id
+        tests: [not_null]
+      - name: customer_key
+        tests: [not_null]
