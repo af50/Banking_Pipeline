@@ -1,14 +1,10 @@
-
 -- staging/stg_transactions.sql
 -- Kaggle financial transactions with fraud labels
 
 {{ config(materialized='view', tags=['staging']) }}
 
 WITH source AS (
-    SELECT * FROM read_parquet(
-        'D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver/kaggle_transactions/**/*.parquet',
-        hive_partitioning = true
-    )
+    SELECT * FROM {{ source('silver', 'kaggle_transactions') }}
 ),
 
 renamed AS (
@@ -34,7 +30,7 @@ renamed AS (
         TRIM(amount_bucket)                             AS amount_bucket,
         TRIM(channel)                                   AS channel,
         COALESCE(CAST(is_fraud AS BOOLEAN), FALSE)      AS is_fraud,
-        COALESCE(country, 'Morroco')                      AS country,
+        COALESCE(country, 'Morocco')                      AS country,
         COALESCE(currency, 'MAD')                       AS currency,
         _silver_loaded_at
     FROM source
@@ -43,3 +39,4 @@ renamed AS (
 )
 
 SELECT * FROM renamed
+QUALIFY ROW_NUMBER() OVER (PARTITION BY transaction_id ORDER BY _silver_loaded_at DESC) = 1
