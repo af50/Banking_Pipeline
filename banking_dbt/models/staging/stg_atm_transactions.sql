@@ -1,18 +1,14 @@
-
 -- staging/stg_atm_transactions.sql
 
 {{ config(materialized='view', tags=['staging']) }}
 
 WITH raw AS (
-    SELECT * FROM read_parquet(
-        'D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver/card_transactions/**/*.parquet',
-        hive_partitioning = true
-    )
+    SELECT * FROM {{ source('silver', 'card_transactions') }}
 )
 
 SELECT
     refnum                              AS refnum,
-    termid                              AS atm_id,
+    terminal_id                              AS atm_id,
     CAST(amount_mad AS DOUBLE)          AS amount_mad,
     CAST(transaction_date AS DATE)      AS transaction_date,
     CAST(transaction_hour AS INTEGER)   AS transaction_hour,
@@ -30,3 +26,4 @@ SELECT
 FROM raw
 WHERE refnum IS NOT NULL
   AND CAST(amount_mad AS DOUBLE) >= 0
+QUALIFY ROW_NUMBER() OVER (PARTITION BY refnum ORDER BY _silver_loaded_at DESC) = 1
