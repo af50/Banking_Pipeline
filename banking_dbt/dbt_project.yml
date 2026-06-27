@@ -1,8 +1,7 @@
 name: banking_dbt
 version: "1.0.0"
 config-version: 2
-
-profile: banking_local
+profile: banking_pipeline
 
 model-paths:      ["models"]
 snapshot-paths:   ["snapshots"]
@@ -15,24 +14,47 @@ clean-targets:    ["target", "dbt_packages"]
 models:
   banking_dbt:
     staging:
+      +enabled: "{{ target.name == 'dev' }}"
       +materialized: view
       +schema: staging
       +tags: ["staging"]
+
+    staging_cloud:
+      +enabled: "{{ target.name == 'prod' }}"
+      +materialized: view
+      +schema: staging
+      +tags: ["staging", "cloud"]
+
     marts:
       dimensions:
+        +enabled: "{{ target.name == 'dev' }}"
         +materialized: table
         +schema: marts
         +tags: ["marts", "dimensions"]
+
+      dimensions_cloud:
+        +enabled: "{{ target.name == 'prod' }}"
+        +materialized: table
+        +schema: gold
+        +tags: ["marts", "dimensions", "cloud"]
+
       facts:
         +materialized: incremental
         +schema: marts
         +tags: ["marts", "facts"]
         +incremental_strategy: merge
+      
+      facts_cloud:
+        +enabled: "{{ target.name == 'prod' }}"
+        +materialized: incremental
+        +schema: gold
+        +incremental_strategy: merge
+        +tags: ["facts", "cloud"]
+
       gold:
         +materialized: table
         +schema: marts
-        +tags: ["marts", "gold"]
-
+        +tags: ["marts", "gold"] 
 snapshots:
   banking_dbt:
     +target_schema: snapshots
@@ -44,10 +66,9 @@ seeds:
     +schema: seeds
 
 vars:
-  fraud_amount_threshold:  2000
-  high_risk_fraud_rate:    0.05
-  lookback_days:           30
-  bank_name:               "Attijariwafa Bank"
-  country:                 "Morocco"
-  currency:                "MAD"
-  
+  fraud_amount_threshold: 2000
+  high_risk_fraud_rate:   0.05
+  lookback_days:          30
+  bank_name:              "Attijariwafa Bank"
+  country:                "Morocco"
+  currency:               "MAD"
