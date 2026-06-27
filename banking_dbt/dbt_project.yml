@@ -4,13 +4,16 @@ config-version: 2
 
 profile: banking_local
 
-model-paths:      ["models"]
-snapshot-paths:   ["snapshots"]
-test-paths:       ["tests"]
-macro-paths:      ["macros"]
-seed-paths:       ["seeds"]
-target-path:      "target"
-clean-targets:    ["target", "dbt_packages"]
+#on-run-start:
+  #- "{{ register_silver_sources() }}"
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
 
 models:
   banking_dbt:
@@ -44,10 +47,9 @@ seeds:
     +schema: seeds
 
 vars:
-  fraud_amount_threshold:  2000
-  high_risk_fraud_rate:    0.05
-  lookback_days:           30
-  bank_name:               "Attijariwafa Bank"
-  country:                 "Morocco"
-  currency:                "MAD"
-  
+  fraud_amount_threshold: 2000
+  high_risk_fraud_rate: 0.05
+  lookback_days: 30
+  bank_name: "Attijariwafa Bank"
+  country: "Morocco"
+  currency: "MAD"
