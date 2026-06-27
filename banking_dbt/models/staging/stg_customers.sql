@@ -3,10 +3,7 @@
 {{ config(materialized='view', tags=['staging']) }}
 
 WITH source AS (
-    SELECT * FROM read_parquet(
-        'D:/NTI INTERNSHIP/Airflow/Banking_pipeline/local_warehouse/delta/silver/customers/**/*.parquet',
-        hive_partitioning = true
-    )
+    SELECT * FROM {{ source('silver', 'customers') }}
 ),
 
 renamed AS (
@@ -29,7 +26,7 @@ renamed AS (
         TRIM(income_segment)                AS income_segment,
         TRIM(credit_tier)                   AS credit_tier,
         CAST(debt_to_income_ratio AS DOUBLE) AS debt_to_income_ratio,
-        COALESCE(country, 'Morroco')          AS country,
+        COALESCE(country, 'Morocco')          AS country,
         COALESCE(currency, 'MAD')           AS currency,
         _silver_loaded_at
     FROM source
@@ -37,3 +34,4 @@ renamed AS (
 )
 
 SELECT * FROM renamed
+QUALIFY ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY _silver_loaded_at DESC) = 1
