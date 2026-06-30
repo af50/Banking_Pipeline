@@ -63,7 +63,7 @@
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-See [`architecture.png`](./architecture.png), [`schema.png`](./schema.jpeg), and [`modeling.png`](./modeling.png) for full visual diagrams.
+See [`architecture.png`](./architecture.png), [`schema.png`](./schema.jpeg), and [`modeling.png`](./modeling.jpeg) for full visual diagrams.
 
 ---
 
